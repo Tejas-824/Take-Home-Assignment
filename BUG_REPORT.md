@@ -1,57 +1,119 @@
 # Bug Report
 
-## Bug 1: Status filter matches partial strings  (FIXED)
-**Where:** `taskService.js` -> `getByStatus`
-**Expected:** `?status=todo` returns only tasks whose status is exactly `todo`.
-**Actual:** it uses `t.status.includes(status)`, which is a substring check.
-So `?status=do` returns both `todo` and `done`, and `?status=o` returns everything.
-**Why it happens:** `includes` on a string checks "is this text inside that text",
-not "are they equal". The developer probably wanted `===`.
-**How I found it:** wrote a test that filters with `do` and expected 0 results.
-**Fix:** `t.status === status`.
+I read through the code, wrote tests for every endpoint, and ran them. Some
+bugs were caught by failing tests, others I found by reading the code. Each bug
+says which. I fixed the first three. The rest are documented because fixing
+them needs a decision from the team.
 
-## Bug 2: Pagination skips the first page  (FIXED)
-**Where:** `taskService.js` -> `getPaginated`
-**Expected:** `page=1&limit=10` returns items 1-10.
-**Actual:** it returns items 11-20, so page 1 is effectively page 2, and
-the first page can never be reached.
-**Why it happens:** `offset = page * limit`. Pages start at 1, so the offset
-should be `(page - 1) * limit`. With page=1 the current code starts at index 10.
-**How I found it:** created 15 tasks, asked for page 1, and the first task
-was not "Task 1".
-**Fix:** `const offset = (page - 1) * limit;`
+---
 
-## Bug 3: Completing a task resets its priority  (FIXED)
-**Where:** `taskService.js` -> `completeTask`
-**Expected:** completing a task only changes `status` and `completedAt`.
-**Actual:** it also sets `priority: 'medium'`, so a high priority task silently
-loses its priority.
-**Why it happens:** a hard-coded `priority: 'medium'` inside the object built in
-`completeTask`. Nothing in the requirements asks for it - looks like a leftover
-or a mistake. It destroys user data with no warning.
-**How I found it:** created a `high` task, completed it, and checked priority.
-**Fix:** removed that line.
+## Bug 1: Filtering by status gives wrong results (FIXED)
 
-## Bug 4: PUT lets the client overwrite any field  (NOT FIXED)
-**Where:** `taskService.js` -> `update` (and `validateUpdateTask` doesn't guard it)
-**Expected:** only editable fields (title, description, status, priority,
-dueDate) can change.
-**Actual:** `{ ...tasks[index], ...fields }` copies everything from the request
-body, so a client can change `id`, `createdAt`, `completedAt`, or add random
-unknown fields.
-**Why it happens:** the body is spread straight into the task with no whitelist.
-**Fix idea:** pick only the allowed keys from `fields` before merging.
-Covered by a `test.failing` test.
+**Where:** `taskService.js`, in `getByStatus`
 
-## Bug 5: Setting status to "done" through PUT doesn't set completedAt  (NOT FIXED)
-**Where:** `taskService.js` -> `update`
-**Actual:** `PUT {status: "done"}` gives a done task with `completedAt: null`,
-while `/complete` sets it. Two ways to finish a task, inconsistent data.
-**Fix idea:** set/clear `completedAt` inside `update` when status changes.
+**What should happen:** Asking for status `todo` returns only tasks that are exactly `todo`.
 
-## Bug 6 (smaller issues)
-- **Pagination input isn't validated.** `page=-1` or `limit=-5` gives strange
-  slices, and `?status=` combined with `?page=` ignores pagination (status wins).
-- **Empty-string/falsy values skip validation.** `if (body.status && ...)`,
-  so `status: ""` passes validation.
-- **Completing an already-completed task** overwrites the old `completedAt`.
+**What actually happens:** It returns any task whose status contains the text
+you typed. Searching `do` returns both `todo` and `done`. Searching `o` returns everything.
+
+**Why:** The code uses `includes`, which asks "is this text anywhere inside that
+text?" It should ask "are these two exactly the same?"
+
+**How I found it:** A test searched for `do` and expected no results. It got two.
+
+**Fix:** Changed `includes(status)` to `=== status`.
+
+---
+
+## Bug 2: Page 1 of the list is skipped (FIXED)
+
+**Where:** `taskService.js`, in `getPaginated`
+
+**What should happen:** Page 1 with 10 items per page shows items 1 to 10.
+
+**What actually happens:** Page 1 shows items 11 to 20. The first page can never be seen,
+and the last page comes back empty.
+
+**Why:** The code skips `page x limit` items. For page 1 that is 10 items. It
+should skip `(page - 1) x limit`, which is zero for page 1.
+
+**How I found it:** A test created 15 tasks and asked for page 1. The first
+task was not "Task 1".
+
+**Fix:** Changed the calculation to `(page - 1) * limit`.
+
+---
+
+## Bug 3: Completing a task wipes out its priority (FIXED)
+
+**Where:** `taskService.js`, in `completeTask`
+
+**What should happen:** Completing a task only changes its status and records when it finished.
+
+**What actually happens:** It also resets the priority to `medium`. A `high`
+priority task silently loses that information.
+
+**Why:** A line in the code hard-codes `priority: 'medium'`. Nothing in the
+requirements asks for it, so it looks like a mistake.
+
+**How I found it:** A test completed a `high` priority task and checked the
+priority. It had changed.
+
+**Fix:** Deleted that line.
+
+---
+
+## Bug 4: The update endpoint lets users change things they shouldn't (NOT FIXED)
+
+**Where:** `taskService.js`, in `update`
+
+**What should happen:** Users can only change editable fields: title,
+description, status, priority and due date.
+
+**What actually happens:** Whatever the user sends gets saved. They could
+change the task's `id` or creation date, or add made-up fields.
+
+**Why:** The code copies the whole request onto the task, with no list of allowed fields.
+
+**How I found it:** By reading the code, then confirmed with a test marked
+`test.failing`, which passes while the bug exists.
+
+**Fix idea:** Copy only the allowed fields and ignore the rest.
+
+**Why not fixed:** It is a bigger change than the others, and the team should
+decide what happens to unknown fields (ignore them or return an error).
+
+---
+
+## Bug 5: Two ways to finish a task, and they don't agree (NOT FIXED)
+
+**Where:** `taskService.js`, in `update`
+
+**What actually happens:** The "complete" endpoint records the completion time.
+Setting status to `done` through the update endpoint does not, so you get
+finished tasks with no completion time.
+
+**How I found it:** By reading the code. `update` never touches `completedAt`.
+There is no test for this yet.
+
+**Fix idea:** Set the completion time when status becomes `done`, and clear it
+if the task is reopened.
+
+---
+
+## Smaller issues (NOT FIXED)
+
+All found by reading the code, none have tests yet.
+
+- **Bad page numbers aren't checked.** `page=-1` or `limit=-5` give odd results instead of an error.
+- **Status and page can't be combined.** If you filter by status and also ask for a page, the page is ignored.
+- **Empty values slip past validation.** `status: ""` is accepted because an empty string counts as "not provided".
+- **Completing a finished task twice** overwrites the original completion time.
+
+---
+
+## Documentation mismatch (NOT FIXED)
+
+The README lists statuses as `pending / in-progress / completed`, but the code
+uses `todo / in_progress / done`. The README's example `?status=pending`
+returns nothing.
